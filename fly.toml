@@ -1,0 +1,31 @@
+# Fly.io configuration for DuoCall.
+# App name will be set via `fly launch` (edits this file in place).
+# Run `fly deploy` after any code change to release a new version.
+
+primary_region = "iad"
+
+[build]
+
+[env]
+  NODE_ENV = "production"
+  PORT = "8080"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Keep at least one machine running so in-memory room state survives idle
+  # periods. Rooms are ephemeral, but cold starts would drop them.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "get"
+    timeout = "5s"
+    path = "/healthz"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

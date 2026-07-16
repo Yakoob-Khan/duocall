@@ -1,0 +1,15 @@
+**/node_modules
+**/dist
+**/.DS_Store
+**/*.log
+.git
+.gitignore
+.vscode
+.idea
+notes/
+PLAN.md
+README.md
+DECISIONS.md
+Dockerfile
+.dockerignore
+fly.toml
