@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter, Route, Routes, Navigate } from "react-router-dom";
 import { Home } from "./pages/Home";
 import { Room } from "./pages/Room";
+import "./index.css";
 
 const root = document.getElementById("root");
 if (!root) throw new Error("#root missing");
