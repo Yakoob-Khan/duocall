@@ -2,6 +2,8 @@
 
 A minimal 1:1 audio calling app built with WebRTC.
 
+![DuoCall demo](./DuoCall.gif)
+
 **Live demo:** https://duocall.fly.dev/
 
 ## What was built
