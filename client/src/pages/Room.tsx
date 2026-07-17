@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { AlertTriangle, Check, Copy, WifiOff } from "lucide-react";
+import { AlertTriangle, Check, Copy, Loader2, WifiOff } from "lucide-react";
 import { SERVER_WS, ICE_SERVERS } from "../env";
 import { SignalingClient, ConnectionState } from "../lib/signaling";
 import { CallController, CallState } from "../lib/rtc";
@@ -11,6 +11,7 @@ import { MicDenied } from "../components/MicDenied";
 import { CaptionOverlay } from "../components/CaptionOverlay";
 import { useAudioLevel } from "../hooks/useAudioLevel";
 import { useSpeechRecognition } from "../hooks/useSpeechRecognition";
+import { useMic } from "../hooks/useMic";
 
 type FatalErrorCode = "room-full" | "invalid-room" | "session-expired";
 const FATAL_ERROR_CODES: readonly FatalErrorCode[] = [
@@ -22,13 +23,13 @@ const FATAL_ERROR_CODES: readonly FatalErrorCode[] = [
 export function Room() {
   const { roomId } = useParams<{ roomId: string }>();
   const navigate = useNavigate();
+  const { state: micState, ensureMic, retry: retryMic } = useMic();
 
   const [connState, setConnState] = useState<ConnectionState>(
     ConnectionState.Idle,
   );
   const [callState, setCallState] = useState<CallState>(CallState.Idle);
   const [muted, setMuted] = useState(false);
-  const [micDenied, setMicDenied] = useState(false);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
@@ -48,12 +49,29 @@ export function Room() {
     },
   });
 
+  // Kick off mic acquisition as soon as Room mounts (dedupes across mounts).
+  useEffect(() => {
+    void ensureMic();
+  }, [ensureMic]);
+
+  // Once the mic is ready, set up signaling + peer connection using the
+  // shared MediaStream. When Room unmounts we tear down the call but keep the
+  // stream alive on the provider so the next Room reuses it without delay.
   useEffect(() => {
     if (!roomId) return;
+    if (micState.status !== "ready") return;
 
-    let cancelled = false;
+    const localStream = micState.stream;
+    // Start unmuted so mute state from a previous room doesn't carry over.
+    for (const track of localStream.getAudioTracks()) track.enabled = true;
+    setMuted(false);
+
     const signaling = new SignalingClient({ url: SERVER_WS });
-    const call = new CallController({ signaling, iceServers: ICE_SERVERS });
+    const call = new CallController({
+      signaling,
+      iceServers: ICE_SERVERS,
+      localStream,
+    });
     signalingRef.current = signaling;
     callRef.current = call;
 
@@ -69,33 +87,23 @@ export function Room() {
       call.on("error", (e) => {
         if (FATAL_ERROR_CODES.includes(e.code as FatalErrorCode)) {
           navigate(`/?error=${e.code}`, { replace: true });
-        } else if (e.code === "mic-denied") {
-          setMicDenied(true);
         } else {
           setErrorBanner(e.message);
         }
       }),
     ];
 
-    (async () => {
-      try {
-        await call.acquireMic();
-      } catch {
-        return;
-      }
-      if (cancelled) return;
-      signaling.joinRoom(roomId);
-    })();
+    call.start();
+    signaling.joinRoom(roomId);
 
     return () => {
-      cancelled = true;
       for (const off of offs) off();
       call.close();
       signaling.close();
       signalingRef.current = null;
       callRef.current = null;
     };
-  }, [roomId, navigate]);
+  }, [roomId, navigate, micState]);
 
   const toggleMute = () => {
     const next = !muted;
@@ -119,13 +127,31 @@ export function Room() {
     }
   };
 
-  const retryMic = () => {
-    setMicDenied(false);
-    window.location.reload();
-  };
+  if (micState.status === "error") {
+    const isTimeout = micState.code === "timeout";
+    return (
+      <MicDenied
+        onRetry={() => void retryMic()}
+        onCancel={() => navigate("/")}
+        title={isTimeout ? "Microphone is busy" : undefined}
+        description={
+          isTimeout
+            ? "The microphone appears to still be in use. Try again in a moment, or refresh the page."
+            : undefined
+        }
+      />
+    );
+  }
 
-  if (micDenied) {
-    return <MicDenied onRetry={retryMic} onCancel={() => navigate("/")} />;
+  if (micState.status !== "ready") {
+    return (
+      <div className="min-h-full flex items-center justify-center">
+        <div className="flex items-center gap-3 text-slate-400">
+          <Loader2 className="h-5 w-5 animate-spin" />
+          <span>Getting microphone…</span>
+        </div>
+      </div>
+    );
   }
 
   return (

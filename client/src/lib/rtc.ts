@@ -31,14 +31,16 @@ type CallEvents = {
 export interface CallControllerOptions {
   signaling: SignalingClient;
   iceServers: RTCIceServer[];
+  localStream: MediaStream;
 }
 
 export class CallController {
   private readonly signaling: SignalingClient;
   private readonly iceServers: RTCIceServer[];
+  // Owned externally (by MicProvider). We never call track.stop() here.
+  private readonly localStream: MediaStream;
 
   private pc: RTCPeerConnection | null = null;
-  private localStream: MediaStream | null = null;
   private peerId: string | null = null;
   private makingOffer = false;
   private ignoreOffer = false;
@@ -64,6 +66,7 @@ export class CallController {
   constructor(opts: CallControllerOptions) {
     this.signaling = opts.signaling;
     this.iceServers = opts.iceServers;
+    this.localStream = opts.localStream;
 
     this.unsubscribes.push(
       this.signaling.on("message", (msg) => {
@@ -115,37 +118,26 @@ export class CallController {
     return this.state;
   }
 
-  async acquireMic(): Promise<MediaStream> {
-    this.setState("acquiring-mic");
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: false,
-      });
-      this.localStream = stream;
-      this.ensurePeerConnection();
-      for (const track of stream.getTracks()) {
-        this.pc?.addTrack(track, stream);
-      }
-      this.setState(this.peerId ? "negotiating" : "waiting-for-peer");
-      return stream;
-    } catch (err) {
-      this.setState("failed");
-      const message = err instanceof Error ? err.message : "unknown-error";
-      this.emit("error", { code: "mic-denied", message });
-      throw err;
+  /**
+   * Attach the pre-acquired local stream to the peer connection and enter the
+   * initial "waiting for peer" state. Call this once, right after construction.
+   * The mic itself is owned by MicProvider - we just borrow its tracks.
+   */
+  start(): void {
+    this.ensurePeerConnection();
+    for (const track of this.localStream.getTracks()) {
+      this.pc?.addTrack(track, this.localStream);
     }
+    this.setState(this.peerId ? "negotiating" : "waiting-for-peer");
   }
 
   setMuted(muted: boolean): void {
-    if (!this.localStream) return;
     for (const track of this.localStream.getAudioTracks()) {
       track.enabled = !muted;
     }
   }
 
   isMuted(): boolean {
-    if (!this.localStream) return false;
     const track = this.localStream.getAudioTracks()[0];
     return track ? !track.enabled : false;
   }
@@ -154,10 +146,9 @@ export class CallController {
     for (const unsub of this.unsubscribes) unsub();
     this.unsubscribes = [];
     this.teardownPeer();
-    if (this.localStream) {
-      for (const track of this.localStream.getTracks()) track.stop();
-      this.localStream = null;
-    }
+    // Deliberately do NOT stop localStream tracks - MicProvider owns them and
+    // keeps them alive across rooms so the next call has zero mic-acquisition
+    // latency.
     this.setState("closed");
   }
 

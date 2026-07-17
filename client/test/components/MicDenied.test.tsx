@@ -27,4 +27,21 @@ describe("MicDenied", () => {
     );
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
+
+  it("renders custom title and description when passed", () => {
+    render(
+      <MicDenied
+        onRetry={() => {}}
+        onCancel={() => {}}
+        title="Microphone is busy"
+        description="The microphone appears to still be in use from a previous session."
+      />,
+    );
+    expect(
+      screen.getByRole("heading", { name: /microphone is busy/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/still be in use from a previous session/i),
+    ).toBeInTheDocument();
+  });
 });

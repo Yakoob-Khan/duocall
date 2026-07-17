@@ -137,22 +137,13 @@ class MockStream {
 }
 
 /* ---------- Setup / teardown ---------- */
-let getUserMediaMock: ReturnType<typeof vi.fn>;
-
 beforeEach(() => {
   MockPC.reset();
-  vi.stubGlobal("RTCPeerConnection", MockPC as unknown as typeof RTCPeerConnection);
   vi.stubGlobal(
-    "MediaStream",
-    MockStream as unknown as typeof MediaStream,
+    "RTCPeerConnection",
+    MockPC as unknown as typeof RTCPeerConnection,
   );
-
-  getUserMediaMock = vi.fn().mockResolvedValue(new MockStream());
-  Object.defineProperty(navigator, "mediaDevices", {
-    value: { getUserMedia: getUserMediaMock },
-    writable: true,
-    configurable: true,
-  });
+  vi.stubGlobal("MediaStream", MockStream as unknown as typeof MediaStream);
 });
 
 afterEach(() => {
@@ -160,56 +151,43 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function makeController() {
+function makeController(track?: MockTrack) {
   const signaling = new FakeSignaling();
+  const stream = new MockStream(track ? [track] : [new MockTrack()]);
   const call = new CallController({
-    signaling: signaling as unknown as import("../../src/lib/signaling").SignalingClient,
+    signaling:
+      signaling as unknown as import("../../src/lib/signaling").SignalingClient,
     iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    localStream: stream as unknown as MediaStream,
   });
-  return { signaling, call };
+  return { signaling, call, stream };
 }
 
 async function flushMicrotasks() {
   for (let i = 0; i < 20; i++) await Promise.resolve();
 }
 
-describe("CallController — acquireMic", () => {
-  it("requests audio-only user media and adds tracks to the peer connection", async () => {
+describe("CallController — start()", () => {
+  it("adds the provided local stream's tracks to the peer connection", () => {
     const { call } = makeController();
-    await call.acquireMic();
-    expect(getUserMediaMock).toHaveBeenCalledWith({
-      audio: true,
-      video: false,
-    });
+    call.start();
     expect(MockPC.instances).toHaveLength(1);
     expect(MockPC.latest().addedTracks.length).toBeGreaterThan(0);
   });
 
-  it("transitions state to waiting-for-peer when acquired without a peer", async () => {
+  it("transitions state to waiting-for-peer when started without a peer", () => {
     const { call } = makeController();
     const states: CallState[] = [];
     call.on("callState", (s) => states.push(s));
-    await call.acquireMic();
-    expect(states).toContain(CallState.AcquiringMic);
+    call.start();
     expect(states[states.length - 1]).toBe(CallState.WaitingForPeer);
-  });
-
-  it("emits 'mic-denied' error and rethrows on getUserMedia rejection", async () => {
-    const { call } = makeController();
-    getUserMediaMock.mockRejectedValue(new Error("Permission denied"));
-    const errors: Array<{ code: string; message: string }> = [];
-    call.on("error", (e) => errors.push(e));
-    await expect(call.acquireMic()).rejects.toThrow("Permission denied");
-    expect(errors).toContainEqual(
-      expect.objectContaining({ code: "mic-denied" }),
-    );
   });
 });
 
 describe("CallController — negotiation (impolite side)", () => {
   it("on 'joined' with an existing peer, sends an SDP offer", async () => {
     const { signaling, call } = makeController();
-    await call.acquireMic();
+    call.start();
 
     signaling.emit({
       type: "joined",
@@ -229,9 +207,9 @@ describe("CallController — negotiation (impolite side)", () => {
     expect(offers[0]!.payload).toMatchObject({ kind: "offer" });
   });
 
-  it("skips negotiation until we have a sending track", async () => {
+  it("skips negotiation until start() has added a sending track", async () => {
     const { signaling, call } = makeController();
-    // No acquireMic yet -> no tracks on the pc
+    // start() not called yet -> no tracks on the pc
     signaling.emit({
       type: "joined",
       roomId: "r",
@@ -251,7 +229,7 @@ describe("CallController — negotiation (impolite side)", () => {
 describe("CallController — polite side + incoming signals", () => {
   it("on 'peer-joined', enters negotiating and waits for the offer", async () => {
     const { signaling, call } = makeController();
-    await call.acquireMic();
+    call.start();
     const states: CallState[] = [];
     call.on("callState", (s) => states.push(s));
     signaling.emit({ type: "peer-joined", peerId: "peer-1" });
@@ -265,7 +243,7 @@ describe("CallController — polite side + incoming signals", () => {
 
   it("responds to an incoming offer with an answer", async () => {
     const { signaling, call } = makeController();
-    await call.acquireMic();
+    call.start();
     signaling.emit({ type: "peer-joined", peerId: "peer-1" });
     signaling.emit({
       type: "signal",
@@ -289,7 +267,7 @@ describe("CallController — polite side + incoming signals", () => {
 
   it("applies an incoming answer as the remote description", async () => {
     const { signaling, call } = makeController();
-    await call.acquireMic();
+    call.start();
     signaling.emit({
       type: "joined",
       roomId: "r",
@@ -313,7 +291,7 @@ describe("CallController — polite side + incoming signals", () => {
 
   it("adds ICE candidates arriving after the remote description", async () => {
     const { signaling, call } = makeController();
-    await call.acquireMic();
+    call.start();
     signaling.emit({
       type: "joined",
       roomId: "r",
@@ -349,7 +327,7 @@ describe("CallController — polite side + incoming signals", () => {
 
   it("queues ICE candidates that arrive before the remote description, then flushes", async () => {
     const { signaling, call } = makeController();
-    await call.acquireMic();
+    call.start();
     signaling.emit({ type: "peer-joined", peerId: "peer-1" });
 
     // Send candidate BEFORE offer arrives
@@ -389,7 +367,7 @@ describe("CallController — polite side + incoming signals", () => {
 describe("CallController — ICE candidate outgoing", () => {
   it("forwards locally-gathered ICE candidates to the peer via signaling", async () => {
     const { signaling, call } = makeController();
-    await call.acquireMic();
+    call.start();
     signaling.emit({
       type: "joined",
       roomId: "r",
@@ -417,7 +395,7 @@ describe("CallController — ICE candidate outgoing", () => {
 
   it("skips end-of-candidates events (candidate === null)", async () => {
     const { signaling, call } = makeController();
-    await call.acquireMic();
+    call.start();
     signaling.emit({
       type: "joined",
       roomId: "r",
@@ -440,7 +418,7 @@ describe("CallController — ICE candidate outgoing", () => {
 describe("CallController — remote stream and connection state", () => {
   it("emits remoteStream when a track event fires on the pc", async () => {
     const { call } = makeController();
-    await call.acquireMic();
+    call.start();
     const streams: Array<MediaStream | null> = [];
     call.on("remoteStream", (s) => streams.push(s));
 
@@ -456,7 +434,7 @@ describe("CallController — remote stream and connection state", () => {
 
   it("transitions to 'connected' when pc.connectionState becomes 'connected'", async () => {
     const { call } = makeController();
-    await call.acquireMic();
+    call.start();
     const states: CallState[] = [];
     call.on("callState", (s) => states.push(s));
 
@@ -468,7 +446,7 @@ describe("CallController — remote stream and connection state", () => {
 
   it("emits ice-failed error when connectionState becomes 'failed'", async () => {
     const { call } = makeController();
-    await call.acquireMic();
+    call.start();
     const errors: Array<{ code: string; message: string }> = [];
     call.on("error", (e) => errors.push(e));
 
@@ -482,11 +460,10 @@ describe("CallController — remote stream and connection state", () => {
 });
 
 describe("CallController — mute", () => {
-  it("setMuted(true) disables all local audio tracks", async () => {
-    const { call } = makeController();
+  it("setMuted(true) disables all local audio tracks", () => {
     const track = new MockTrack();
-    getUserMediaMock.mockResolvedValue(new MockStream([track]));
-    await call.acquireMic();
+    const { call } = makeController(track);
+    call.start();
     call.setMuted(true);
     expect(track.enabled).toBe(false);
     expect(call.isMuted()).toBe(true);
@@ -494,17 +471,12 @@ describe("CallController — mute", () => {
     expect(track.enabled).toBe(true);
     expect(call.isMuted()).toBe(false);
   });
-
-  it("setMuted is a no-op when no local stream exists yet", () => {
-    const { call } = makeController();
-    expect(() => call.setMuted(true)).not.toThrow();
-  });
 });
 
 describe("CallController — peer-left and close", () => {
   it("on 'peer-left', tears down the peer connection and returns to waiting", async () => {
     const { signaling, call } = makeController();
-    await call.acquireMic();
+    call.start();
     signaling.emit({
       type: "joined",
       roomId: "r",
@@ -525,20 +497,19 @@ describe("CallController — peer-left and close", () => {
     expect(streams).toContain(null);
   });
 
-  it("close() closes the pc and stops local tracks", async () => {
-    const { call } = makeController();
+  it("close() closes the pc but does NOT stop local tracks (owned by MicProvider)", () => {
     const track = new MockTrack();
-    getUserMediaMock.mockResolvedValue(new MockStream([track]));
-    await call.acquireMic();
+    const { call } = makeController(track);
+    call.start();
     const pc = MockPC.latest();
     call.close();
     expect(pc.closed).toBe(true);
-    expect(track.stop).toHaveBeenCalled();
+    expect(track.stop).not.toHaveBeenCalled();
   });
 
   it("close() emits state 'closed'", async () => {
     const { call } = makeController();
-    await call.acquireMic();
+    call.start();
     const states: CallState[] = [];
     call.on("callState", (s) => states.push(s));
     call.close();

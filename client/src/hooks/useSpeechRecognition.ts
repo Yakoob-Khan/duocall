@@ -26,6 +26,7 @@ interface SpeechRecognitionInstance {
   onend: (() => void) | null;
   start: () => void;
   stop: () => void;
+  abort: () => void;
 }
 type SpeechRecognitionCtor = new () => SpeechRecognitionInstance;
 
@@ -95,8 +96,11 @@ export function useSpeechRecognition({
 
     return () => {
       shouldRestart = false;
+      // abort() releases the mic hardware immediately without waiting for the
+      // graceful stop -> onend cycle. Critical for making the next
+      // getUserMedia call in a fresh room succeed quickly.
       try {
-        rec.stop();
+        rec.abort();
       } catch {
         /* ignore */
       }
