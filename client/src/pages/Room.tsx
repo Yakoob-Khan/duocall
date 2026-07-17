@@ -11,7 +11,7 @@ import { MicDenied } from "../components/MicDenied";
 import { CaptionOverlay } from "../components/CaptionOverlay";
 import { useAudioLevel } from "../hooks/useAudioLevel";
 import { useSpeechRecognition } from "../hooks/useSpeechRecognition";
-import { useMic } from "../hooks/useMic";
+import { useMic, type MicErrorCode } from "../hooks/useMic";
 
 type FatalErrorCode = "room-full" | "invalid-room" | "session-expired";
 const FATAL_ERROR_CODES: readonly FatalErrorCode[] = [
@@ -128,17 +128,13 @@ export function Room() {
   };
 
   if (micState.status === "error") {
-    const isTimeout = micState.code === "timeout";
+    const copy = micErrorCopy(micState.code);
     return (
       <MicDenied
         onRetry={() => void retryMic()}
         onCancel={() => navigate("/")}
-        title={isTimeout ? "Microphone is busy" : undefined}
-        description={
-          isTimeout
-            ? "The microphone appears to still be in use. Try again in a moment, or refresh the page."
-            : undefined
-        }
+        title={copy.title}
+        description={copy.description}
       />
     );
   }
@@ -235,6 +231,33 @@ export function Room() {
       <audio ref={audioRef} autoPlay playsInline />
     </div>
   );
+}
+
+function micErrorCopy(code: MicErrorCode): {
+  title: string;
+  description: string;
+} {
+  switch (code) {
+    case "timeout":
+      return {
+        title: "Microphone is busy",
+        description:
+          "The microphone appears to still be in use. Try again in a moment, or refresh the page.",
+      };
+    case "blocked":
+      return {
+        title: "Microphone access is blocked",
+        description:
+          "Your browser is blocking mic access for this site. Click the lock (or site-info) icon in the address bar → find Microphone → set it to Allow. Then click Try Again.",
+      };
+    case "denied":
+    default:
+      return {
+        title: "Microphone access needed",
+        description:
+          "DuoCall needs your microphone to place calls. Click Try Again to re-open the mic prompt.",
+      };
+  }
 }
 
 function stateLabel(state: CallState): string {

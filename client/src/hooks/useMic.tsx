@@ -10,11 +10,13 @@ import {
 
 const MIC_TIMEOUT_MS = 8_000;
 
+export type MicErrorCode = "denied" | "blocked" | "timeout";
+
 export type MicState =
   | { status: "idle" }
   | { status: "acquiring" }
   | { status: "ready"; stream: MediaStream }
-  | { status: "error"; code: "denied" | "timeout"; message: string };
+  | { status: "error"; code: MicErrorCode; message: string };
 
 interface MicContextValue {
   state: MicState;
@@ -23,6 +25,24 @@ interface MicContextValue {
 }
 
 const MicContext = createContext<MicContextValue | null>(null);
+
+/**
+ * Query the current microphone permission state. Returns null if the
+ * Permissions API is not available (older Safari). "denied" here means the
+ * user explicitly clicked Block - the browser will refuse to show the popup
+ * again on subsequent getUserMedia calls until the site permission is reset.
+ */
+async function queryMicPermission(): Promise<PermissionState | null> {
+  if (typeof navigator === "undefined" || !navigator.permissions) return null;
+  try {
+    const result = await navigator.permissions.query({
+      name: "microphone" as PermissionName,
+    });
+    return result.state;
+  } catch {
+    return null;
+  }
+}
 
 async function getUserMediaWithTimeout(): Promise<MediaStream> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -57,9 +77,16 @@ export function MicProvider({ children }: { children: ReactNode }) {
       setState({ status: "ready", stream });
     } catch (err) {
       const isTimeout = err instanceof Error && err.message === "mic-timeout";
+      // Distinguish "explicitly blocked" from "prompt dismissed / not answered":
+      // blocked -> Chrome will refuse to re-show the popup until the site
+      //   permission is reset in browser settings.
+      // denied  -> the popup will appear again on the next getUserMedia call,
+      //   so a plain "Try Again" is enough to recover.
+      const permState = isTimeout ? null : await queryMicPermission();
+      const isBlocked = permState === "denied";
       setState({
         status: "error",
-        code: isTimeout ? "timeout" : "denied",
+        code: isBlocked ? "blocked" : isTimeout ? "timeout" : "denied",
         message:
           err instanceof Error
             ? isTimeout
