@@ -15,10 +15,17 @@ export const CallState = {
 export type CallState = (typeof CallState)[keyof typeof CallState];
 
 type Handler<T> = (value: T) => void;
+
+export interface CaptionEvent {
+  text: string;
+  final: boolean;
+}
+
 type CallEvents = {
   callState: CallState;
   remoteStream: MediaStream | null;
   error: { code: string; message: string };
+  caption: CaptionEvent;
 };
 
 export interface CallControllerOptions {
@@ -37,15 +44,18 @@ export class CallController {
   private ignoreOffer = false;
   private isPolite = false;
   private queuedRemoteCandidates: RTCIceCandidateInit[] = [];
+  private captionsChannel: RTCDataChannel | null = null;
 
   private handlers: {
     callState: Set<Handler<CallState>>;
     remoteStream: Set<Handler<MediaStream | null>>;
     error: Set<Handler<{ code: string; message: string }>>;
+    caption: Set<Handler<CaptionEvent>>;
   } = {
     callState: new Set(),
     remoteStream: new Set(),
     error: new Set(),
+    caption: new Set(),
   };
 
   private state: CallState = "idle";
@@ -190,8 +200,42 @@ export class CallController {
       void this.startNegotiation();
     });
 
+    // Polite side: peer creates the data channel; we adopt it when it arrives.
+    pc.addEventListener("datachannel", (event) => {
+      this.attachCaptionsChannel(event.channel);
+    });
+
     this.pc = pc;
     return pc;
+  }
+
+  private attachCaptionsChannel(channel: RTCDataChannel): void {
+    this.captionsChannel = channel;
+    channel.addEventListener("message", (event: MessageEvent<string>) => {
+      try {
+        const parsed = JSON.parse(event.data) as {
+          type?: string;
+          text?: string;
+          final?: boolean;
+        };
+        if (
+          parsed.type === "caption" &&
+          typeof parsed.text === "string" &&
+          typeof parsed.final === "boolean"
+        ) {
+          this.emit("caption", { text: parsed.text, final: parsed.final });
+        }
+      } catch {
+        /* ignore malformed */
+      }
+    });
+  }
+
+  sendCaption(text: string, final: boolean): void {
+    if (this.captionsChannel?.readyState !== "open") return;
+    this.captionsChannel.send(
+      JSON.stringify({ type: "caption", text, final }),
+    );
   }
 
   private async startNegotiation(): Promise<void> {
@@ -202,6 +246,11 @@ export class CallController {
     // addTrack) or the joined handler will retry once we have a sending track.
     const hasSendingTrack = pc.getSenders().some((s) => !!s.track);
     if (!hasSendingTrack) return;
+    // Impolite side: create the captions data channel before the offer so it's
+    // part of the SDP. The polite side will receive it via 'datachannel'.
+    if (!this.isPolite && !this.captionsChannel) {
+      this.attachCaptionsChannel(pc.createDataChannel("captions"));
+    }
     try {
       this.makingOffer = true;
       this.setState("negotiating");
@@ -283,6 +332,14 @@ export class CallController {
   }
 
   private teardownPeer(): void {
+    if (this.captionsChannel) {
+      try {
+        this.captionsChannel.close();
+      } catch {
+        /* ignore */
+      }
+      this.captionsChannel = null;
+    }
     if (this.pc) {
       try {
         this.pc.close();

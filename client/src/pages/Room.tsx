@@ -8,6 +8,9 @@ import { Header } from "../components/Header";
 import { PeerCircle } from "../components/PeerCircle";
 import { ControlBar } from "../components/ControlBar";
 import { MicDenied } from "../components/MicDenied";
+import { CaptionOverlay } from "../components/CaptionOverlay";
+import { useAudioLevel } from "../hooks/useAudioLevel";
+import { useSpeechRecognition } from "../hooks/useSpeechRecognition";
 
 type FatalErrorCode = "room-full" | "invalid-room" | "session-expired";
 const FATAL_ERROR_CODES: readonly FatalErrorCode[] = [
@@ -28,10 +31,22 @@ export function Room() {
   const [micDenied, setMicDenied] = useState(false);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [remoteCaption, setRemoteCaption] = useState<string | null>(null);
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const signalingRef = useRef<SignalingClient | null>(null);
   const callRef = useRef<CallController | null>(null);
+
+  const isRemoteSpeaking = useAudioLevel(remoteStream);
+
+  const isConnected = callState === CallState.Connected;
+  const { supported: sttSupported } = useSpeechRecognition({
+    enabled: isConnected && !muted,
+    onTranscript: (text, final) => {
+      callRef.current?.sendCaption(text, final);
+    },
+  });
 
   useEffect(() => {
     if (!roomId) return;
@@ -47,7 +62,10 @@ export function Room() {
       call.on("callState", setCallState),
       call.on("remoteStream", (stream) => {
         if (audioRef.current) audioRef.current.srcObject = stream;
+        setRemoteStream(stream);
+        if (!stream) setRemoteCaption(null);
       }),
+      call.on("caption", ({ text }) => setRemoteCaption(text)),
       call.on("error", (e) => {
         if (FATAL_ERROR_CODES.includes(e.code as FatalErrorCode)) {
           navigate(`/?error=${e.code}`, { replace: true });
@@ -144,12 +162,16 @@ export function Room() {
           </div>
         )}
 
-        <PeerCircle callState={callState} />
+        <PeerCircle callState={callState} isSpeaking={isRemoteSpeaking} />
 
         <div className="mt-6 text-center">
           <p className="text-xl font-medium">{stateLabel(callState)}</p>
           <p className="mt-1 text-sm text-slate-400">{stateHint(callState)}</p>
         </div>
+
+        {isConnected && (
+          <CaptionOverlay text={remoteCaption} supported={sttSupported} />
+        )}
 
         <div className="mt-8 w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
           <p className="text-xs uppercase tracking-wider text-slate-500">

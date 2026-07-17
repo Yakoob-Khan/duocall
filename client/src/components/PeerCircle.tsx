@@ -35,15 +35,26 @@ function renderIcon(callState: CallState): ReactNode {
   }
 }
 
-export function PeerCircle({ callState }: { callState: CallState }) {
+export interface PeerCircleProps {
+  callState: CallState;
+  isSpeaking?: boolean;
+}
+
+export function PeerCircle({ callState, isSpeaking = false }: PeerCircleProps) {
   const isConnected = callState === CallState.Connected;
+  const showSpeakingRing = isConnected && isSpeaking;
+  const showStaticRing = isConnected && !isSpeaking;
+
   return (
     <div className="relative">
-      {isConnected && (
+      {showSpeakingRing && (
         <>
-          <span className="absolute inset-0 -m-6 animate-pulse-slow rounded-full bg-emerald-500/10" />
-          <span className="absolute inset-0 -m-3 rounded-full bg-emerald-500/20" />
+          <span className="absolute inset-0 -m-8 animate-ping rounded-full bg-emerald-400/20" />
+          <span className="absolute inset-0 -m-4 rounded-full bg-emerald-500/30 ring-2 ring-emerald-300/40" />
         </>
+      )}
+      {showStaticRing && (
+        <span className="absolute inset-0 -m-2 rounded-full bg-emerald-500/10" />
       )}
       <div
         className={`relative flex h-40 w-40 items-center justify-center rounded-full border-2 transition-colors ${CIRCLE_CLASSES[callState]}`}

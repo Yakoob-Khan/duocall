@@ -44,18 +44,35 @@ describe("PeerCircle", () => {
     }
   });
 
-  it("shows pulse ring elements only when connected", () => {
-    const { container: connectedC } = render(
+  it("shows a static emerald ring when connected but not speaking", () => {
+    const { container } = render(
       <PeerCircle callState={CallState.Connected} />,
     );
-    expect(
-      connectedC.querySelectorAll("span.animate-pulse-slow").length,
-    ).toBeGreaterThan(0);
+    expect(container.querySelectorAll(".animate-ping").length).toBe(0);
+    expect(container.querySelector(".bg-emerald-500\\/10")).not.toBeNull();
+  });
 
-    const { container: waitingC } = render(
-      <PeerCircle callState={CallState.WaitingForPeer} />,
+  it("shows an animated pulse ring when connected AND speaking", () => {
+    const { container } = render(
+      <PeerCircle callState={CallState.Connected} isSpeaking={true} />,
     );
-    expect(waitingC.querySelectorAll("span.animate-pulse-slow").length).toBe(0);
+    expect(container.querySelectorAll(".animate-ping").length).toBeGreaterThan(
+      0,
+    );
+  });
+
+  it("shows no pulse rings when not connected, even if isSpeaking is true", () => {
+    for (const state of [
+      CallState.WaitingForPeer,
+      CallState.Idle,
+      CallState.Negotiating,
+      CallState.Failed,
+    ]) {
+      const { container } = render(
+        <PeerCircle callState={state} isSpeaking={true} />,
+      );
+      expect(container.querySelectorAll(".animate-ping").length).toBe(0);
+    }
   });
 
   it("renders spinning icon for negotiating/acquiring-mic", () => {

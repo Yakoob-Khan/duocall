@@ -99,6 +99,15 @@ class MockPC {
     this.closed = true;
   }
 
+  createDataChannel(_label: string): RTCDataChannel {
+    return {
+      readyState: "open" as RTCDataChannelState,
+      send: vi.fn(),
+      close: vi.fn(),
+      addEventListener: vi.fn(),
+    } as unknown as RTCDataChannel;
+  }
+
   addEventListener(type: string, listener: (event: unknown) => void) {
     (this.listeners[type] ??= []).push(listener);
   }
