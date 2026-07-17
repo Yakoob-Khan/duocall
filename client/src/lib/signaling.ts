@@ -4,12 +4,16 @@ import type {
   SignalPayload,
 } from "./types";
 
+export const ConnectionState = {
+  Idle: "idle",
+  Connecting: "connecting",
+  Connected: "connected",
+  Reconnecting: "reconnecting",
+  Closed: "closed",
+} as const;
+
 export type ConnectionState =
-  | "idle"
-  | "connecting"
-  | "connected"
-  | "reconnecting"
-  | "closed";
+  (typeof ConnectionState)[keyof typeof ConnectionState];
 
 type Handler<T> = (value: T) => void;
 

@@ -105,7 +105,7 @@ export function Home() {
       <footer className="border-t border-slate-900/80 bg-slate-950 px-6 py-4 text-center text-xs text-slate-500">
         <span className="inline-flex items-center gap-1.5">
           <Lock className="h-3.5 w-3.5" />
-          Peer-to-peer over WebRTC. Media is encrypted end-to-end (SRTP/DTLS).
+          Peer-to-peer over WebRTC. Media is encrypted end-to-end.
         </span>
       </footer>
     </div>

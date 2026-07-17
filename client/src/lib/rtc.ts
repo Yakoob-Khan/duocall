@@ -1,15 +1,18 @@
 import type { SignalingClient } from "./signaling";
 import type { SignalPayload } from "./types";
 
-export type CallState =
-  | "idle"
-  | "acquiring-mic"
-  | "waiting-for-peer"
-  | "negotiating"
-  | "connected"
-  | "reconnecting"
-  | "failed"
-  | "closed";
+export const CallState = {
+  Idle: "idle",
+  AcquiringMic: "acquiring-mic",
+  WaitingForPeer: "waiting-for-peer",
+  Negotiating: "negotiating",
+  Connected: "connected",
+  Reconnecting: "reconnecting",
+  Failed: "failed",
+  Closed: "closed",
+} as const;
+
+export type CallState = (typeof CallState)[keyof typeof CallState];
 
 type Handler<T> = (value: T) => void;
 type CallEvents = {
