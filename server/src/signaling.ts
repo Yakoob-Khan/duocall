@@ -1,8 +1,17 @@
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "@fastify/websocket";
-import { RoomManager } from "./rooms.js";
+import { RoomManager, type Client } from "./rooms.js";
 import { ROOM_ID_REGEX } from "./config.js";
-import type { ClientMessage, ServerMessage } from "./types.js";
+import type {
+  ClientMessage,
+  ErrorCode,
+  ServerMessage,
+} from "./types.js";
+
+type MessageOf<T extends ClientMessage["type"]> = Extract<
+  ClientMessage,
+  { type: T }
+>;
 
 export function registerSignaling(app: FastifyInstance, rooms: RoomManager) {
   app.get("/ws", { websocket: true }, (socket: WebSocket) => {
@@ -13,101 +22,90 @@ export function registerSignaling(app: FastifyInstance, rooms: RoomManager) {
         socket.send(JSON.stringify(msg));
       }
     };
+    const sendError = (code: ErrorCode, message: string) =>
+      send({ type: "error", code, message });
 
-    const sendError = (
-      code: import("./types.js").ErrorCode,
-      message: string,
-    ) => send({ type: "error", code, message });
+    /* ---------- per-message-type handlers ---------- */
+
+    const handleJoin = (msg: MessageOf<"join">) => {
+      if (clientId) {
+        return sendError("already-joined", "This connection is already in a room");
+      }
+      if (!ROOM_ID_REGEX.test(msg.roomId)) {
+        return sendError("invalid-room", "Room ID is malformed");
+      }
+      const result = rooms.join(msg.roomId, send);
+      if (!result.ok) {
+        return sendError(result.error, describeError(result.error));
+      }
+      clientId = result.client.id;
+      send({
+        type: "joined",
+        roomId: msg.roomId,
+        self: result.client.id,
+        token: result.client.token,
+        peers: result.peers.map((p) => p.id),
+      });
+      notifyPeersJoined(result.peers, result.client.id);
+    };
+
+    const handleResume = (msg: MessageOf<"resume">) => {
+      if (clientId) {
+        return sendError("already-joined", "This connection is already in a room");
+      }
+      const result = rooms.resume(msg.token, send);
+      if (!result.ok) {
+        return sendError(result.error, "Session expired or invalid");
+      }
+      clientId = result.client.id;
+      send({
+        type: "resumed",
+        roomId: result.client.roomId,
+        self: result.client.id,
+        peers: result.peers.map((p) => p.id),
+      });
+    };
+
+    const handleSignal = (msg: MessageOf<"signal">) => {
+      if (!clientId) {
+        return sendError("not-in-room", "Join a room before signaling");
+      }
+      const result = rooms.routeSignal(clientId, msg.to, msg.payload);
+      if (result === "peer-not-found") {
+        sendError("peer-not-found", "Peer not in this room");
+      }
+    };
+
+    const handleLeave = () => {
+      if (!clientId) return;
+      rooms.leave(clientId);
+      clientId = null;
+    };
+
+    const handlePing = () => {
+      if (clientId) rooms.touch(clientId);
+      send({ type: "pong" });
+    };
+
+    /* ---------- socket lifecycle ---------- */
 
     socket.on("message", (raw: Buffer) => {
-      let msg: ClientMessage;
-      try {
-        msg = JSON.parse(raw.toString());
-      } catch {
-        sendError("invalid-message", "Malformed JSON");
-        return;
-      }
+      const msg = tryParse(raw);
+      if (!msg) return sendError("invalid-message", "Malformed JSON");
 
       switch (msg.type) {
-        case "join": {
-          if (clientId) {
-            sendError("already-joined", "This connection is already in a room");
-            return;
-          }
-          if (!ROOM_ID_REGEX.test(msg.roomId)) {
-            sendError("invalid-room", "Room ID is malformed");
-            return;
-          }
-          const result = rooms.join(msg.roomId, send);
-          if (!result.ok) {
-            sendError(result.error, describeError(result.error));
-            return;
-          }
-          clientId = result.client.id;
-          send({
-            type: "joined",
-            roomId: msg.roomId,
-            self: result.client.id,
-            token: result.client.token,
-            peers: result.peers.map((p) => p.id),
-          });
-          for (const peer of result.peers) {
-            if (peer.connected) {
-              peer.send({ type: "peer-joined", peerId: result.client.id });
-            }
-          }
-          break;
-        }
-
-        case "resume": {
-          if (clientId) {
-            sendError("already-joined", "This connection is already in a room");
-            return;
-          }
-          const result = rooms.resume(msg.token, send);
-          if (!result.ok) {
-            sendError(result.error, "Session expired or invalid");
-            return;
-          }
-          clientId = result.client.id;
-          send({
-            type: "resumed",
-            roomId: result.client.roomId,
-            self: result.client.id,
-            peers: result.peers.map((p) => p.id),
-          });
-          break;
-        }
-
-        case "signal": {
-          if (!clientId) {
-            sendError("not-in-room", "Join a room before signaling");
-            return;
-          }
-          const result = rooms.routeSignal(clientId, msg.to, msg.payload);
-          if (result === "peer-not-found") {
-            sendError("peer-not-found", "Peer not in this room");
-          }
-          break;
-        }
-
-        case "leave": {
-          if (clientId) {
-            rooms.leave(clientId);
-            clientId = null;
-          }
-          break;
-        }
-
-        case "ping": {
-          if (clientId) rooms.touch(clientId);
-          send({ type: "pong" });
-          break;
-        }
-
-        default: {
-          sendError("invalid-message", "Unknown message type");
-        }
+        case "join":
+          return handleJoin(msg);
+        case "resume":
+          return handleResume(msg);
+        case "signal":
+          return handleSignal(msg);
+        case "leave":
+          return handleLeave();
+        case "ping":
+          return handlePing();
+        default:
+          return sendError("invalid-message", "Unknown message type");
       }
     });
 
@@ -124,7 +122,25 @@ export function registerSignaling(app: FastifyInstance, rooms: RoomManager) {
   });
 }
 
-function describeError(code: string): string {
+/* ---------- pure helpers ---------- */
+
+function tryParse(raw: Buffer): ClientMessage | null {
+  try {
+    return JSON.parse(raw.toString()) as ClientMessage;
+  } catch {
+    return null;
+  }
+}
+
+function notifyPeersJoined(peers: Client[], newPeerId: string): void {
+  for (const peer of peers) {
+    if (peer.connected) {
+      peer.send({ type: "peer-joined", peerId: newPeerId });
+    }
+  }
+}
+
+function describeError(code: ErrorCode): string {
   switch (code) {
     case "invalid-room":
       return "Room does not exist";

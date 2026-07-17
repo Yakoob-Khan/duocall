@@ -10,17 +10,16 @@ import { RoomManager } from "./rooms.js";
 import { registerSignaling } from "./signaling.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const isProduction = process.env.NODE_ENV === "production";
 
 async function main() {
   const app = Fastify({
     logger: {
-      level: process.env.LOG_LEVEL ?? "info",
-      transport: isProduction
+      level: config.logLevel,
+      transport: config.isProduction
         ? undefined
         : { target: "pino-pretty", options: { colorize: true } },
     },
-    trustProxy: isProduction,
+    trustProxy: config.isProduction,
   });
 
   await app.register(cors, {
@@ -66,7 +65,7 @@ async function main() {
 
   registerSignaling(app, rooms);
 
-  if (isProduction) {
+  if (config.isProduction) {
     const publicDir = path.resolve(__dirname, "../public");
     await app.register(staticPlugin, {
       root: publicDir,

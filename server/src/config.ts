@@ -1,6 +1,13 @@
+type NodeEnv = "production" | "development" | "test";
+const nodeEnv = (process.env.NODE_ENV ?? "development") as NodeEnv;
+
 export const config = {
+  nodeEnv,
+  isProduction: nodeEnv === "production",
+
   port: Number(process.env.PORT ?? 8080),
   host: process.env.HOST ?? "0.0.0.0",
+  logLevel: process.env.LOG_LEVEL ?? "info",
 
   roomIdLength: 21,
   clientIdLength: 16,
